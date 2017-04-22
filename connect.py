@@ -1,6 +1,7 @@
 import json
 import requests
 import time
+import os
 import utils
 import uuid
 from selenium import webdriver
@@ -34,7 +35,11 @@ class OnedriveStorage(object):
     def __init__(self):
         self.recorder_path = "recorder"
         self.logger = utils.init_logger("OnedriveStorage")
-        self.access_token = self.authorize()
+        if os.path.isfile(configs.access_token_path):
+            with open(configs.access_token_path) as fin:
+                self.access_token = fin.readline()
+        else:
+            self.access_token = self.authorize()
         self.headers_template = {
             'Authorization': 'Bearer {0}'.format(self.access_token),
             'Accept': 'application/json',
@@ -42,6 +47,14 @@ class OnedriveStorage(object):
             'client-request-id': None,
             'return-client-request-id': 'true'
         }
+        try:
+            self.list_recorder_folder()
+        except OnedriveException as e:
+            print "Invalid Access Token"
+            self.access_token = self.authorize()
+            self.headers_template["Authorization"] = 'Bearer {0}'.format(self.access_token)
+        with open(configs.access_token_path, "w") as fout:
+            fout.write(self.access_token)
 
     def authorize(self):
         data = {
@@ -54,7 +67,8 @@ class OnedriveStorage(object):
         for key in data:
             url += key + "=" + str(data[key]) + "&"
         url = url[:-1]
-        firefox = webdriver.Firefox()
+        script_path = os.path.split(os.path.realpath(__file__))[0]
+        firefox = webdriver.Firefox(executable_path=script_path + "/geckodriver")
         firefox.get(url)
         prefix = "https://login.microsoftonline.com/common/oauth2/nativeclient#access_token="
         while not firefox.current_url.startswith(prefix):
@@ -78,11 +92,11 @@ class OnedriveStorage(object):
         ans = [f['name'] for f in content["value"]]
         return ans
 
-    def list_recoder_folder(self):
+    def list_recorder_folder(self):
         return self.list_children(self.recorder_path)
 
-    def exist_recoder_file(self, name):
-        return name in self.list_recoder_folder()
+    def exist_recorder_file(self, name):
+        return name in self.list_recorder_folder()
 
     def download_file(self, item_path, item_name):
         headers = self.headers_template.copy()
@@ -99,7 +113,7 @@ class OnedriveStorage(object):
         return self.download_file(self.recorder_path, item_name)
 
     def get_recorder_file_content(self, item_name, empty=None):
-        if self.exist_recoder_file(item_name):
+        if self.exist_recorder_file(item_name):
             return json.loads(self.download_recorder_file(item_name))
         return empty
 
@@ -129,9 +143,9 @@ class OnedriveStorage(object):
 
 if __name__ == "__main__":
     storage = OnedriveStorage()
-    print storage.list_recoder_folder()
-    print storage.exist_recoder_file("1.txt")
-    print storage.upload_recoder_file("1.txt", '["hello"]')
+    print storage.list_recorder_folder()
+    print storage.exist_recorder_file("1.txt")
+    print storage.upload_recorder_file("1.txt", '["hello"]')
     print storage.get_recorder_file_content("1.txt")
-    print storage.list_recoder_folder()
+    print storage.list_recorder_folder()
 
