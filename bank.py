@@ -1,185 +1,229 @@
-#! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import copy
 import datetime
-import json
 
 import connect
 import utils
 
+from errors import *
+
+
+def crud_type_check(func):
+    def wrapper(*args, **kwargs):
+        self = args[0]
+        try:
+            ind = kwargs.get("ind")
+            if ind is not None and not isinstance(ind, int):
+                kwargs["ind"] = int(ind)
+        except Exception, e:
+            self.logger.error(utils.describe_error(e))
+            raise InvalidParameterException("ind")
+        try:
+            content = kwargs.get("content")
+            if content is not None and not isinstance(content, unicode):
+                kwargs["content"] = unicode(content, "utf8")
+        except Exception, e:
+            self.logger.error(utils.describe_error(e))
+            raise InvalidParameterException("content")
+        try:
+            score = kwargs.get("score")
+            if score is not None and not isinstance(score, int):
+                kwargs["score"] = int(score)
+        except Exception, e:
+            self.logger.error(utils.describe_error(e))
+            raise InvalidParameterException("score")
+        try:
+            num = kwargs.get("num")
+            if num is not None and not isinstance(num, int):
+                kwargs["num"] = int(num)
+        except Exception, e:
+            self.logger.error(utils.describe_error(e))
+            raise InvalidParameterException("num")
+        try:
+            vol = kwargs.get("vol")
+            if vol is not None and not isinstance(vol, int):
+                kwargs["vol"] = int(vol)
+        except Exception, e:
+            self.logger.error(utils.describe_error(e))
+            raise InvalidParameterException("vol")
+
+        try:
+            remark = kwargs.get("remark")
+            if remark is not None and not isinstance(remark, unicode):
+                kwargs["remark"] = unicode(remark, "utf8")
+        except Exception, e:
+            self.logger.error(utils.describe_error(e))
+            raise InvalidParameterException("remark")
+
+        if kwargs.get("mode") is not None and kwargs.get("mode") not in ["t", "a"]:
+            raise InvalidParameterException("mode")
+
+        if kwargs.get("time") is not None:
+            datetime.datetime.strptime(kwargs.get("time"), utils.DATETIME_FORMAT)
+
+        if kwargs.get("date") is not None:
+            datetime.datetime.strptime(kwargs.get("date"), utils.DATE_FORMAT)
+
+        return func(*args, **kwargs)
+
+    return wrapper
+
 
 class Bank(object):
-    def __init__(self):
-        self.logger = utils.init_logger("Bank")
-        self.all_bank_fname = "all_bank.json"
-        self.all_account_fname = "all_account.json"
-        self.all_tasks_fname = "all_tasks.json"
-        self.tasks_fname = "{}_tasks.json"
-        self.all_cost_fname = "all_cost.json"
-        self.cost_fname = "{}_cost.json"
-        self.onedrive = connect.OnedriveStorage()
+    def __init__(self, name="default"):
+        self.name = name
+        self.logger = utils.init_logger("Bank_%s" % name)
+        self.bank_fname = "%s_all_bank.json" % name
+        self.all_tasks_fname = "%s_all_tasks.json" % name
+        self.tasks_fname = "%s_{}_tasks.json" % name
+        self.costs_fname = "%s_{}_cost.json" % name
+        self.onedrive = connect.holder.get_storage()
+        self.bank = self.onedrive.get_recorder_file_content(self.bank_fname, None)
         self.all_tasks = self.onedrive.get_recorder_file_content(self.all_tasks_fname, [])
-        self.all_cost = self.onedrive.get_recorder_file_content(self.all_cost_fname, [])
         self.today = datetime.date.today()
-        self.today_tasks_fname = self.tasks_fname.format(self.today)
+        self.today_tasks_fname = self.tasks_fname.format(self.today.strftime(utils.DATE_FORMAT))
         self.today_tasks = self.onedrive.get_recorder_file_content(self.today_tasks_fname, [])
-        self.today_cost_fname = self.cost_fname.format(self.today)
-        self.today_cost = self.onedrive.get_recorder_file_content(self.today_cost_fname, [])
+        self.today_costs_fname = self.costs_fname.format(self.today)
+        self.today_costs = self.onedrive.get_recorder_file_content(self.today_costs_fname, [])
+        self.all_tasks.sort(key=lambda task: (task["score"], task["num"]))
+        self.today_tasks.sort(key=lambda task: (task["score"], task["num"]))
+        if self.bank is None:
+            self.bank = self.init_bank()
 
-    def create_update_task(self, mode, content, score, unit=1, num=1, ind=None):
-        if score is not None and not isinstance(score, int):
-            score = int(score)
-        if unit is not None and not isinstance(unit, int):
-            unit = int(unit)
-        if num is not None and not isinstance(num, int):
-            num = int(num)
-        if ind is not None and not isinstance(ind, int):
-            ind = int(ind)
-        if not isinstance(content, unicode):
-            content = unicode(content, "utf8")
+    def init_bank(self, golden=0):
+        _bank = dict()
+        _bank["golden"] = golden
+        vols = [-1] * len(self.all_tasks + self.today_tasks)
+        for ind, task in enumerate(self.all_tasks):
+            vols[ind] = task["num"]
+        for ind, task in enumerate(self.today_tasks):
+            vols[ind + len(self.all_tasks)] = task["num"]
+        _bank["vols"] = vols
+        return _bank
 
+    @crud_type_check
+    def create_task(self, content, score, num=1, mode="t"):
         task = {
             "content": content,
             "score": score,
-            "unit": unit,
             "num": num
         }
+
         if mode == 'a':
-            if ind is not None:
-                self.all_tasks[ind] = task
-            else:
-                self.all_tasks.append(task)
+            self.all_tasks.append(task)
+            self.bank["vols"].insert(len(self.all_tasks), num)
+            self.all_tasks.sort(key=lambda task: (task["score"], task["num"]))
         else:
-            if ind is not None:
-                self.today_tasks[ind] = task
-            else:
-                self.today_tasks.append(task)
+            self.today_tasks.append(task)
+            self.bank["vols"].append(num)
+            self.today_tasks.sort(key=lambda task: (task["score"], task["num"]))
         self.retrieve_tasks()
 
-    def retrieve_tasks(self):
-        header_format = u"%5s|%5s|%5s|%5s|%5s|%s"
-        task_format = u"%5s|%5s|%5d|%5d|%5d|%s"
-        print header_format % ("Mode", "Id", "Score", "Num", "Unit", "Content")
-        for ind, task in enumerate(self.all_tasks):
-            print task_format % ("a", ind, task["score"], task["num"], task["unit"], task["content"])
-        for ind, task in enumerate(self.today_tasks):
-            print task_format % ("t", ind, task["score"], task["num"], task["unit"], task["content"])
+    def retrieve_tasks(self, date=None):
+        header_format = u"%5s|%5s|%5s|%5s|%8s|%s"
+        task_format = u"%5s|%5s|%5d|%5d|%8d|%s"
+        print header_format % ("Mode", "Id", "Score", "Num", "Volume", "Content")
+        all_tasks = copy.deepcopy(self.all_tasks)
+        for ind, task in enumerate(all_tasks):
+            task["vol"] = self.bank["vols"][ind]
+        if date is None:
+            today_tasks = copy.deepcopy(self.today_tasks)
+        else:
+            today_tasks = self.onedrive.get_recorder_file_content(self.tasks_fname.format(date), [])
+        for ind, task in enumerate(today_tasks):
+            task["vol"] = self.bank["vols"][ind + len(self.all_tasks)]
+        for ind, task in enumerate(all_tasks):
+            print task_format % ("a", ind, task["score"], task["vol"], task["num"], task["content"])
+        for ind, task in enumerate(today_tasks):
+            print task_format % ("t", ind + len(all_tasks), task["score"], task["vol"], task["num"], task["content"])
 
-    def delete_tasks(self, mode, ind):
-        if ind is not None and not isinstance(ind, int):
-            ind = int(ind)
-        if mode == "a":
+    @crud_type_check
+    def update_task(self, ind, content=None, score=None, num=None, vol=None):
+        if ind is None:
+            raise RequiredArgEmptyException("ind")
+        if ind < len(self.all_tasks):
+            task = self.all_tasks[ind]
+        else:
+            task = self.today_tasks[ind - len(self.all_tasks)]
+        if content is not None:
+            task["content"] = content
+        if score is not None:
+            task["score"] = score
+        if num is not None:
+            task["num"] = num
+        if vol is not None:
+            self.bank["vols"][ind] = vol
+        self.all_tasks.sort(key=lambda task: (task["score"], task["num"]))
+        self.today_tasks.sort(key=lambda task: (task["score"], task["num"]))
+        self.retrieve_tasks()
+
+    @crud_type_check
+    def delete_task(self, ind):
+        if ind < len(self.all_tasks):
             self.all_tasks.pop(ind)
         else:
-            self.today_tasks.pop(ind)
+            self.today_tasks.pop(ind - len(self.all_tasks))
+        self.bank["vols"].pop(ind)
         self.retrieve_tasks()
 
-    def create_update_cost(self, mode, content, score, unit=1, ind=None):
-        if score is not None and not isinstance(score, int):
-            score = int(score)
-        if unit is not None and not isinstance(unit, int):
-            unit = int(unit)
-        if ind is not None and not isinstance(ind, int):
-            ind = int(ind)
-        if not isinstance(content, unicode):
-            content = unicode(content, "utf8")
+    @crud_type_check
+    def create_cost(self, ind, num=1, remark="", force=False):
+        task = self.all_tasks[ind] if ind < len(self.all_tasks) else self.today_tasks[ind - len(self.all_tasks)]
+        if not force:
+            vol = self.bank["vols"][ind]
+            if vol != -1 and vol < num:
+                self.logger.warning("Task Volume exceeds! Cost %d instead!" % vol)
+                num = vol
+            if task["score"] < 0 and task["score"] * num + self.bank["golden"] < 0:
+                raise GoldenExceedException()
 
         cost = {
-            "content": content,
-            "score": score,
-            "unit": unit
+            "task": task,
+            "num": num,
+            "remark": remark,
+            "time": datetime.datetime.now().strftime(utils.DATETIME_FORMAT)
         }
-        if mode == 'a':
-            if ind is not None:
-                self.all_cost[ind] = cost
-            else:
-                self.all_cost.append(cost)
-        else:
-            if ind is not None:
-                self.today_cost[ind] = cost
-            else:
-                self.today_cost.append(cost)
-        self.retrieve_cost()
+        self.bank["golden"] += task["score"] * num
+        self.today_costs.append(cost)
 
-    def retrieve_cost(self):
-        header_format = u"%5s|%5s|%5s|%5s|%s"
-        cost_format = u"%5s|%5s|%5d|%5d|%s"
-        print header_format % ("Mode", "Id", "Score", "Unit", "Content")
-        for ind, cost in enumerate(self.all_cost):
-            print cost_format % ("a", ind, cost["score"], cost["unit"], cost["content"])
-        for ind, cost in enumerate(self.today_cost):
-            print cost_format % ("t", ind, cost["score"], cost["unit"], cost["content"])
-
-    def delete_cost(self, mode, ind):
-        if ind is not None and not isinstance(ind, int):
-            ind = int(ind)
-        if mode == "a":
-            self.all_cost.pop(ind)
+    def retrieve_costs(self, date=None):
+        header_format = u"%15s|%5s|%5s|%5s|%s|%s"
+        cost_format = u"%15s|%5d|%5d|%5d|%s|%s"
+        print header_format % ("Time", "Id", "Score", "Num", "Content", "Remark")
+        if date is None:
+            today_costs = copy.deepcopy(self.today_costs)
         else:
-            self.today_cost.pop(ind)
-        self.retrieve_cost()
+            today_costs = self.onedrive.get_recorder_file_content(self.costs_fname.format(date), [])
+        for ind, cost in enumerate(today_costs):
+            print cost_format % (cost["time"], ind, cost["task"]["score"], cost["num"], cost["task"]["content"],
+                                 cost["remark"])
+
+    @crud_type_check
+    def update_cost(self, ind, num=None, remark=None, time=None):
+        cost = self.today_costs[ind]
+        if num is not None:
+            self.bank["golden"] -= cost["task"]["score"] * cost["num"]
+            self.bank["golden"] += cost["task"]["score"] * num
+            cost["num"] = num
+        if remark is not None:
+            cost["remark"] = remark
+        if time is not None:
+            cost["time"] = time
+
+    @crud_type_check
+    def delete_cost(self, ind):
+        self.today_costs.pop(ind)
+        self.retrieve_costs()
 
     def save(self, refresh=False):
+        self.onedrive.save_recorder_file_content(self.bank_fname, self.bank)
         self.onedrive.save_recorder_file_content(self.all_tasks_fname, self.all_tasks)
         self.onedrive.save_recorder_file_content(self.today_tasks_fname, self.today_tasks)
+        self.onedrive.save_recorder_file_content(self.today_costs_fname, self.today_costs)
         if refresh and self.today != datetime.date.today():
             self.today_tasks_fname = self.tasks_fname.format(self.today)
+            self.today_costs_fname = self.costs_fname.format(self.today)
             self.today_tasks = self.onedrive.get_recorder_file_content(self.today_tasks_fname, [])
-
-    def help(self):
-        print u'Task: t Op(c|r|u|d) Mode(a|t) id content score unit num, For example: t c a 背英语单词 5 20 20'
-        print u'Cost: c Op(c|r|u|d) Mode(a|t) id content score unit, For example: c c t Lunch-Normal 5'
-
-    def run(self):
-        self.help()
-        while True:
-            try:
-                op = raw_input(">>").strip()
-                eles = op.split(' ')
-                eles = [ele.strip() for ele in eles if ele.strip()]
-                if eles[0] == 'e':
-                    break
-                elif eles[0] == 'h':
-                    self.help()
-                elif eles[0] == 's':
-                    refresh = False
-                    if len(eles) == 2 and eles[1] == 'r':
-                        refresh = True
-                    self.save(refresh)
-                elif eles[0] == 't':
-                    if eles[1] == "c":
-                        self.create_update_task(eles[2], eles[3], eles[4],
-                                                eles[5] if len(eles) > 5 else 1, eles[6] if len(eles) > 6 else 1)
-                    elif eles[1] == "r":
-                        self.retrieve_tasks()
-                    elif eles[1] == "u":
-                        self.create_update_task(eles[2], eles[4], eles[5],
-                                                eles[6] if len(eles) > 6 else 1,
-                                                eles[7] if len(eles) > 7 else 1, eles[3])
-                    elif eles[1] == "d":
-                        self.delete_tasks(eles[2], eles[3])
-                    else:
-                        print "Unknown op"
-                elif eles[0] == 'c':
-                    if eles[1] == "c":
-                        self.create_update_cost(eles[2], eles[3], eles[4],
-                                                eles[5] if len(eles) > 5 else 1, )
-                    elif eles[1] == "r":
-                        self.retrieve_cost()
-                    elif eles[1] == "u":
-                        self.create_update_cost(eles[2], eles[4], eles[5],
-                                                eles[6] if len(eles) > 6 else 1, eles[3])
-                    elif eles[1] == "d":
-                        self.delete_cost(eles[2], eles[3])
-                    else:
-                        print "Unknown op"
-                else:
-                    print 'Unknown op'
-            except EOFError as e:
-                break
-            except Exception as e:
-                self.logger.error(e)
-
-if __name__ == '__main__':
-    bank = Bank()
-    bank.run()
+            self.today_tasks = self.onedrive.get_recorder_file_content(self.today_tasks_fname, [])
+            self.bank = self.init_bank(self.bank["golden"])

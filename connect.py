@@ -9,6 +9,8 @@ from selenium import webdriver
 import configs
 
 graph_api_endpoint = 'https://graph.microsoft.com/v1.0{0}'
+create_folder_url = "/drive/root/{parent_path}children"
+create_folder_method = "POST"
 list_children_url = "/drive/root:/{item_path}:/children"
 list_children_method = "GET"
 download_file_url = "/drive/root:/{item_path}/{item_name}:/content"
@@ -47,14 +49,7 @@ class OnedriveStorage(object):
             'client-request-id': None,
             'return-client-request-id': 'true'
         }
-        try:
-            self.list_recorder_folder()
-        except OnedriveException as e:
-            print "Invalid Access Token"
-            self.access_token = self.authorize()
-            self.headers_template["Authorization"] = 'Bearer {0}'.format(self.access_token)
-        with open(configs.access_token_path, "w") as fout:
-            fout.write(self.access_token)
+        self.check_authorize()
 
     def authorize(self):
         data = {
@@ -67,8 +62,9 @@ class OnedriveStorage(object):
         for key in data:
             url += key + "=" + str(data[key]) + "&"
         url = url[:-1]
-        script_path = os.path.split(os.path.realpath(__file__))[0]
-        firefox = webdriver.Firefox(executable_path=script_path + "/geckodriver")
+        # script_path = os.path.split(os.path.realpath(__file__))[0]
+        # firefox = webdriver.Firefox(executable_path=script_path + "/geckodriver")
+        firefox = webdriver.Firefox()
         firefox.get(url)
         prefix = "https://login.microsoftonline.com/common/oauth2/nativeclient#access_token="
         while not firefox.current_url.startswith(prefix):
@@ -77,8 +73,18 @@ class OnedriveStorage(object):
         try:
             firefox.quit()
         except Exception as e:
-            self.logger.error(e)
+            self.logger.error(utils.describe_error(e))
         return access_token
+
+    def check_authorize(self):
+        try:
+            self.list_recorder_folder()
+        except OnedriveException as e:
+            print "Invalid Access Token"
+            self.access_token = self.authorize()
+            self.headers_template["Authorization"] = 'Bearer {0}'.format(self.access_token)
+        with open(configs.access_token_path, "w") as fout:
+            fout.write(self.access_token)
 
     def list_children(self, item_path):
         headers = self.headers_template.copy()
@@ -94,6 +100,29 @@ class OnedriveStorage(object):
 
     def list_recorder_folder(self):
         return self.list_children(self.recorder_path)
+
+    def create_folder(self, parent_path, folder_name):
+        parent_path = parent_path.strip()
+        if len(parent_path) > 0 and not parent_path.endswith('/'):
+            parent_path += '/'
+        headers = self.headers_template.copy()
+        headers["client-request-id"] = str(uuid.uuid4())
+        resource = create_folder_url.format(**{"parent_path": parent_path})
+        data = {
+            "name": folder_name,
+            "folder": {"childCount": 0}
+        }
+        url = graph_api_endpoint.format(resource)
+        response = requests.request(create_folder_method, url, headers=headers, data=data)
+        if response.status_code / 100 != 2:
+            raise OnedriveException("create_folder", response.status_code, url, create_folder_method, response.text)
+        content = json.loads(response.content)
+        ans = [f['name'] for f in content["value"]]
+        return ans
+
+    def create_recorder_folder(self):
+        return self.create_folder(self.recorder_path[:self.recorder_path.rindex("/" + 1)] if "/" in self.recorder_path
+                                  else "", self.recorder_path)
 
     def exist_recorder_file(self, name):
         return name in self.list_recorder_folder()
@@ -140,6 +169,16 @@ class OnedriveStorage(object):
 
     def refresh_authorize(self):
         self.access_token = self.authorize()
+
+
+class OnedriveStorageHolder(object):
+    def __init__(self):
+        self.storage = OnedriveStorage()
+
+    def get_storage(self):
+        return self.storage
+
+holder = OnedriveStorageHolder()
 
 if __name__ == "__main__":
     storage = OnedriveStorage()
