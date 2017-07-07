@@ -64,7 +64,8 @@ class OnedriveStorage(object):
         url = url[:-1]
         # script_path = os.path.split(os.path.realpath(__file__))[0]
         # firefox = webdriver.Firefox(executable_path=script_path + "/geckodriver")
-        firefox = webdriver.Firefox()
+        # firefox = webdriver.Firefox()
+        firefox = webdriver.Firefox(executable_path=os.path.join(os.getcwd(), "geckodriver"))
         firefox.get(url)
         prefix = "https://login.microsoftonline.com/common/oauth2/nativeclient#access_token="
         while not firefox.current_url.startswith(prefix):

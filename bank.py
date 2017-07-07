@@ -29,7 +29,7 @@ def crud_type_check(func):
         try:
             score = kwargs.get("score")
             if score is not None and not isinstance(score, int):
-                kwargs["score"] = int(score)
+                kwargs["score"] = float(score)
         except Exception, e:
             self.logger.error(utils.describe_error(e))
             raise InvalidParameterException("score")
@@ -76,20 +76,26 @@ class Bank(object):
         self.logger = utils.init_logger("Bank_%s" % name)
         self.bank_fname = "%s_all_bank.json" % name
         self.all_tasks_fname = "%s_all_tasks.json" % name
+        self.all_costs_fname = "%s_all_costs.json" % name
         self.tasks_fname = "%s_{}_tasks.json" % name
         self.costs_fname = "%s_{}_cost.json" % name
         self.onedrive = connect.holder.get_storage()
         self.bank = self.onedrive.get_recorder_file_content(self.bank_fname, None)
         self.all_tasks = self.onedrive.get_recorder_file_content(self.all_tasks_fname, [])
-        self.today = datetime.date.today()
-        self.today_tasks_fname = self.tasks_fname.format(self.today.strftime(utils.DATE_FORMAT))
+        self.all_costs = self.onedrive.get_recorder_file_content(self.all_costs_fname, [])
+        self.today = datetime.date.today().strftime(utils.DATE_FORMAT)
         self.today_tasks = self.onedrive.get_recorder_file_content(self.today_tasks_fname, [])
-        self.today_costs_fname = self.costs_fname.format(self.today)
         self.today_costs = self.onedrive.get_recorder_file_content(self.today_costs_fname, [])
-        self.all_tasks.sort(key=lambda task: (task["score"], task["num"]))
-        self.today_tasks.sort(key=lambda task: (task["score"], task["num"]))
         if self.bank is None:
             self.bank = self.init_bank()
+
+    @property
+    def today_tasks_fname(self):
+        return self.tasks_fname.format(self.today)
+
+    @property
+    def today_costs_fname(self):
+        return self.costs_fname.format(self.today)
 
     def init_bank(self, golden=0):
         _bank = dict()
@@ -113,11 +119,9 @@ class Bank(object):
         if mode == 'a':
             self.all_tasks.append(task)
             self.bank["vols"].insert(len(self.all_tasks), num)
-            self.all_tasks.sort(key=lambda task: (task["score"], task["num"]))
         else:
             self.today_tasks.append(task)
             self.bank["vols"].append(num)
-            self.today_tasks.sort(key=lambda task: (task["score"], task["num"]))
         self.retrieve_tasks()
 
     def retrieve_tasks(self, date=None):
@@ -134,9 +138,9 @@ class Bank(object):
         for ind, task in enumerate(today_tasks):
             task["vol"] = self.bank["vols"][ind + len(self.all_tasks)]
         for ind, task in enumerate(all_tasks):
-            print task_format % ("a", ind, task["score"], task["vol"], task["num"], task["content"])
+            print task_format % ("a", ind, task["score"], task["num"], task["vol"], task["content"])
         for ind, task in enumerate(today_tasks):
-            print task_format % ("t", ind + len(all_tasks), task["score"], task["vol"], task["num"], task["content"])
+            print task_format % ("t", ind + len(all_tasks), task["score"], task["num"], task["vol"], task["content"])
 
     @crud_type_check
     def update_task(self, ind, content=None, score=None, num=None, vol=None):
@@ -154,8 +158,6 @@ class Bank(object):
             task["num"] = num
         if vol is not None:
             self.bank["vols"][ind] = vol
-        self.all_tasks.sort(key=lambda task: (task["score"], task["num"]))
-        self.today_tasks.sort(key=lambda task: (task["score"], task["num"]))
         self.retrieve_tasks()
 
     @crud_type_check
@@ -168,7 +170,7 @@ class Bank(object):
         self.retrieve_tasks()
 
     @crud_type_check
-    def create_cost(self, ind, num=1, remark="", force=False):
+    def create_cost(self, ind, num=1, remark="", force=False, mode="t"):
         task = self.all_tasks[ind] if ind < len(self.all_tasks) else self.today_tasks[ind - len(self.all_tasks)]
         if not force:
             vol = self.bank["vols"][ind]
@@ -185,26 +187,35 @@ class Bank(object):
             "time": datetime.datetime.now().strftime(utils.DATETIME_FORMAT)
         }
         self.bank["golden"] += task["score"] * num
-        self.today_costs.append(cost)
+        self.bank["vols"][ind] -= num
+        if mode == 'a':
+            self.all_costs.append(cost)
+        else:
+            self.today_costs.append(cost)
 
     def retrieve_costs(self, date=None):
-        header_format = u"%15s|%5s|%5s|%5s|%s|%s"
-        cost_format = u"%15s|%5d|%5d|%5d|%s|%s"
-        print header_format % ("Time", "Id", "Score", "Num", "Content", "Remark")
+        header_format = u"%5s|%15s|%5s|%5s|%5s|%s|%s"
+        cost_format = u"%5s|%15s|%5d|%5d|%5d|%s|%s"
+        print header_format % ("Mode", "Time", "Id", "Score", "Num", "Content", "Remark")
+        all_costs = copy.deepcopy(self.all_costs)
         if date is None:
             today_costs = copy.deepcopy(self.today_costs)
         else:
             today_costs = self.onedrive.get_recorder_file_content(self.costs_fname.format(date), [])
-        for ind, cost in enumerate(today_costs):
-            print cost_format % (cost["time"], ind, cost["task"]["score"], cost["num"], cost["task"]["content"],
+        for ind, cost in enumerate(all_costs):
+            print cost_format % ("a", cost["time"], ind, cost["task"]["score"], cost["num"], cost["task"]["content"],
                                  cost["remark"])
+        for ind, cost in enumerate(today_costs):
+            print cost_format % ("t", cost["time"], ind + len(self.all_costs), cost["task"]["score"], cost["num"],
+                                 cost["task"]["content"], cost["remark"])
 
     @crud_type_check
     def update_cost(self, ind, num=None, remark=None, time=None):
-        cost = self.today_costs[ind]
+        if ind < len(self.all_costs):
+            cost = self.all_costs[ind]
+        else:
+            cost = self.today_costs[ind - len(self.all_costs)]
         if num is not None:
-            self.bank["golden"] -= cost["task"]["score"] * cost["num"]
-            self.bank["golden"] += cost["task"]["score"] * num
             cost["num"] = num
         if remark is not None:
             cost["remark"] = remark
@@ -213,7 +224,10 @@ class Bank(object):
 
     @crud_type_check
     def delete_cost(self, ind):
-        self.today_costs.pop(ind)
+        if ind < len(self.all_costs):
+            self.all_costs.pop(ind)
+        else:
+            self.today_costs.pop(ind - len(self.all_costs))
         self.retrieve_costs()
 
     def save(self, refresh=False):
@@ -222,8 +236,10 @@ class Bank(object):
         self.onedrive.save_recorder_file_content(self.today_tasks_fname, self.today_tasks)
         self.onedrive.save_recorder_file_content(self.today_costs_fname, self.today_costs)
         if refresh and self.today != datetime.date.today():
-            self.today_tasks_fname = self.tasks_fname.format(self.today)
-            self.today_costs_fname = self.costs_fname.format(self.today)
+            self.today = datetime.date.today().strftime(utils.DATE_FORMAT)
             self.today_tasks = self.onedrive.get_recorder_file_content(self.today_tasks_fname, [])
-            self.today_tasks = self.onedrive.get_recorder_file_content(self.today_tasks_fname, [])
+            self.today_costs = self.onedrive.get_recorder_file_content(self.today_costs_fname, [])
             self.bank = self.init_bank(self.bank["golden"])
+
+    def workon(self, date):
+        self.today = date

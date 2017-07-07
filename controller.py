@@ -28,7 +28,7 @@ class Controller(object):
         print u'Task: task u <ind> [content <content>]? [score <score>]? [num <num>]? [vol <vol>]?'
         print u'Task: task d <ind>'
         print u'Cost: cost Op(c|r|u|d)'
-        print u'Cost: cost c <ind> <num>? <remark>? <option>? Option: f: force to create cost'
+        print u'Cost: cost c <ind> <num>? <remark>? <option>? Option: f: force to create cost a: mode a'
         print u'Cost: cost r <date>?'
         print u'Cost: cost u <ind> [num <num>]? [remark <remark>]? [time <time>]?'
         print u'Cost: cost d <ind>'
@@ -45,6 +45,10 @@ class Controller(object):
             self.bank = bank.Bank(name=name)
             self.banks[name] = self.bank
         print 'Successfully open bank %s.' % name
+
+    def workon(self, date):
+        self.bank.workon(date=date)
+        print 'Now we are working on %s.' % self.bank.today
 
     def step_save(self, eles):
         kwargs = dict()
@@ -96,6 +100,8 @@ class Controller(object):
             if len(eles) > 5:
                 if "f" in eles[5]:
                     kwargs["force"] = True
+                if "a" in eles[5]:
+                    kwargs["mode"] = "a"
             self.bank.create_cost(**kwargs)
         elif command == "r":
             if len(eles) > 2:
@@ -127,6 +133,8 @@ class Controller(object):
                     self.authorize()
                 elif eles[0] == "open":
                     self.open(eles[1])
+                elif eles[0] == "workon":
+                    self.workon(eles[1])
                 elif eles[0] == 'golden':
                     self.step_golden(eles)
                 elif eles[0] == 'save':
