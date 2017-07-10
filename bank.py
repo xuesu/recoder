@@ -126,7 +126,7 @@ class Bank(object):
 
     def retrieve_tasks(self, date=None):
         header_format = u"%5s|%5s|%5s|%5s|%8s|%s"
-        task_format = u"%5s|%5s|%5d|%5d|%8d|%s"
+        task_format = u"%5s|%5s|%5f|%5d|%8d|%s"
         print header_format % ("Mode", "Id", "Score", "Num", "Volume", "Content")
         all_tasks = copy.deepcopy(self.all_tasks)
         for ind, task in enumerate(all_tasks):
@@ -170,7 +170,7 @@ class Bank(object):
         self.retrieve_tasks()
 
     @crud_type_check
-    def create_cost(self, ind, num=1, remark="", force=False, mode="t"):
+    def create_cost(self, ind, num=1, remark="", force=False, mode="a"):
         task = self.all_tasks[ind] if ind < len(self.all_tasks) else self.today_tasks[ind - len(self.all_tasks)]
         if not force:
             vol = self.bank["vols"][ind]
@@ -195,7 +195,7 @@ class Bank(object):
 
     def retrieve_costs(self, date=None):
         header_format = u"%5s|%15s|%5s|%5s|%5s|%s|%s"
-        cost_format = u"%5s|%15s|%5d|%5d|%5d|%s|%s"
+        cost_format = u"%5s|%15s|%5d|%5f|%5d|%s|%s"
         print header_format % ("Mode", "Time", "Id", "Score", "Num", "Content", "Remark")
         all_costs = copy.deepcopy(self.all_costs)
         if date is None:
